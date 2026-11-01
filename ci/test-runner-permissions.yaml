@@ -1,0 +1,115 @@
+# Access for the CI runner (postgres-runners) to run tests/ - nothing more.
+# Apply with: kubectl apply -f ci/test-runner-permissions.yaml
+
+# Permanent namespace for test apps (tests empty it after each run)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pgtest
+---
+# Identity used by the runner pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-tests
+  namespace: arc-runners
+---
+# In "databases": check health, run psql, run/remove backup jobs, read backup files
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: postgres-tests
+  namespace: databases
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, persistentvolumeclaims, services]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods]
+    resourceNames: [pgtest-files]     # may only delete its own helper pod
+    verbs: [delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [postgres-admin]   # only checks that it exists
+    verbs: [get]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: postgres-tests
+  namespace: databases
+subjects:
+  - kind: ServiceAccount
+    name: postgres-tests
+    namespace: arc-runners
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: postgres-tests
+---
+# In "pgtest": create/remove test app secrets and client pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: postgres-tests
+  namespace: pgtest
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, secrets]
+    verbs: [get, list, watch, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: postgres-tests
+  namespace: pgtest
+subjects:
+  - kind: ServiceAccount
+    name: postgres-tests
+    namespace: arc-runners
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: postgres-tests
+---
+# new-app-db.sh checks the app namespace exists (only pgtest allowed)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: postgres-tests
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [pgtest]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: postgres-tests
+subjects:
+  - kind: ServiceAccount
+    name: postgres-tests
+    namespace: arc-runners
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: postgres-tests

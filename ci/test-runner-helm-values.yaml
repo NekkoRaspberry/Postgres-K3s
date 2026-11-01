@@ -1,0 +1,16 @@
+# Runner set only for the Postgres-K3s repo, using the postgres-tests account.
+# Install with:
+#   helm install postgres-runners -n arc-runners -f ci/test-runner-helm-values.yaml \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set --version 0.15.1
+githubConfigUrl: https://github.com/NekkoRaspberry/Postgres-K3s
+githubConfigSecret: arc-github-app   # existing GitHub App secret (same as nekko-runners)
+runnerScaleSetName: postgres-runners
+minRunners: 0
+maxRunners: 1
+template:
+  spec:
+    serviceAccountName: postgres-tests
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:latest
+        command: ["/home/runner/run.sh"]

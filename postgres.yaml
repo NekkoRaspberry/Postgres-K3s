@@ -1,0 +1,100 @@
+# PostgreSQL for K3s: namespace, internal service and the database itself
+# Apply with: kubectl apply -f postgres.yaml
+
+# Separate namespace for shared databases
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: databases
+---
+# Internal-only address for PostgreSQL (ClusterIP: not reachable from outside the cluster)
+# Apps connect to: postgres.databases.svc.cluster.local:5432
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: databases
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+# One shared PostgreSQL instance for multiple applications
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: databases
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          # Official image, supports ARM64. Major version pinned to 17.
+          image: postgres:17-alpine
+          args:
+            # Small memory footprint for the Raspberry Pi
+            - "-c"
+            - "shared_buffers=128MB"
+            - "-c"
+            - "max_connections=50"
+            # Fewer, larger checkpoints = fewer SD card writes
+            - "-c"
+            - "checkpoint_timeout=15min"
+            - "-c"
+            - "max_wal_size=512MB"
+          env:
+            # Admin password comes from a Secret created by hand (never stored in a file)
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-admin
+                  key: POSTGRES_PASSWORD
+            # Subfolder avoids problems if the volume root is not empty
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  # Persistent storage. Uses k3s "local-path" (currently the SD card:
+  # /var/lib/rancher/k3s/storage). Move to SSD later.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi

@@ -1,0 +1,34 @@
+# Run the PostgreSQL tests on the Raspberry Pi on every push to main or dev
+name: Postgres Tests
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+# One test run at a time (all runs use the same test database names)
+concurrency:
+  group: postgres-tests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Runner on the Raspberry Pi only for this repo (see ci/test-runner-helm-values.yaml)
+    runs-on: postgres-runners
+    steps:
+      - uses: actions/checkout@v5
+
+      # kubectl matching the K3s version
+      - name: Install kubectl
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSLo "$HOME/bin/kubectl" https://dl.k8s.io/release/v1.36.5/bin/linux/arm64/kubectl
+          chmod +x "$HOME/bin/kubectl"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      # --no-restart: do not restart the database on every push
+      - name: Run tests
+        run: ./tests/run-all.sh --no-restart

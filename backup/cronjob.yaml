@@ -1,0 +1,94 @@
+# Nightly backup of every PostgreSQL database.
+# Each run creates a folder <date>/ (one per day, a second run the same day replaces it) with:
+#   globals.sql   - users/roles and their passwords (hashed)
+#   <db>.dump     - one file per database (pg_dump custom format)
+# Backups older than 7 days are deleted.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: databases
+spec:
+  schedule: "0 3 * * *"          # every day at 03:00
+  timeZone: "Europe/Lisbon"
+  concurrencyPolicy: Forbid      # never run two backups at once
+  # If the Pi was off at 03:00, run the missed backup when it starts again
+  # (only if the missed time was within the last 7 days)
+  startingDeadlineSeconds: 604800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400   # remove finished jobs after 1 day
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            # Run as user "rasp" so backup files belong to you, not root
+            runAsUser: 1000
+            runAsGroup: 1000
+          containers:
+            - name: backup
+              image: postgres:17-alpine
+              env:
+                - name: PGHOST
+                  value: postgres.databases.svc.cluster.local
+                - name: PGUSER
+                  value: postgres
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-admin
+                      key: POSTGRES_PASSWORD
+                - name: KEEP_DAYS
+                  value: "7"
+                # Name of this job, used to tell test runs apart from real backups
+                - name: JOB_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['job-name']
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  umask 077   # backup files readable only by you
+                  case "$JOB_NAME" in
+                    # Test runs get their own folder and never replace a real backup
+                    postgres-backup-test-*) NAME="test_$(date +%Y-%m-%d_%H%M%S)" ;;
+                    *) NAME="$(date +%Y-%m-%d)" ;;
+                  esac
+                  # Write to a .partial folder first, rename when complete
+                  WORK="/backup/$NAME.partial"
+                  rm -rf "$WORK"
+                  mkdir -p "$WORK"
+                  pg_dumpall --globals-only > "$WORK/globals.sql"
+                  for DB in $(psql -d postgres -tAc "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'"); do
+                    echo "Dumping $DB"
+                    pg_dump -Fc -d "$DB" -f "$WORK/$DB.dump"
+                  done
+                  # Only one backup per day: replace today's previous one
+                  rm -rf "/backup/$NAME"
+                  mv "$WORK" "/backup/$NAME"
+                  # Retention: delete backups older than KEEP_DAYS
+                  find /backup -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} +
+                  echo "Backup OK: $NAME"
+                  ls -l "/backup/$NAME"
+              securityContext:
+                allowPrivilegeEscalation: false
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            # Destination folder on the Pi. Change this path to move backups
+            # (e.g. /mnt/backup on an SSD, USB drive or NAS share).
+            - name: backup
+              hostPath:
+                path: /home/rasp/projects/Postgres-K3s/backup/data
+                type: Directory

@@ -1,0 +1,7 @@
+# Never commit passwords or dumps
+.env
+*.env
+*secret*
+*.sql
+*.dump
+backup/data/
