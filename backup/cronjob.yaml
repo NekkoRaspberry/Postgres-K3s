@@ -90,5 +90,5 @@ spec:
             # (e.g. /mnt/backup on an SSD, USB drive or NAS share).
             - name: backup
               hostPath:
-                path: /home/rasp/projects/Postgres-K3s/backup/data
+                path: /home/rasp/projects/Development/Postgres-K3s/backup/data
                 type: Directory
